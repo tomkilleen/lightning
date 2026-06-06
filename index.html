@@ -1,0 +1,1291 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Lightning Tracker</title>
+  <script src="https://unpkg.com/globe.gl"></script>
+  <script src="https://cdn.jsdelivr.net/npm/topojson-client@3"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: ui-monospace, 'SF Mono', 'Cascadia Mono', 'Fira Mono', Menlo, Monaco, 'Lucida Console', monospace;
+      background: radial-gradient(ellipse at 50% 44%, #100c06 0%, #030200 65%);
+      height: 100dvh;
+      overflow: hidden;
+    }
+
+    /* Globe canvas only — #effects-canvas excluded so strike effects stay in colour */
+    #globe-wrap canvas:not(#effects-canvas) {
+      filter: grayscale(1);
+    }
+
+    /* Cinematic vignette */
+    #globe-wrap::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: radial-gradient(ellipse at 50% 50%, transparent 38%, rgba(2,1,0,0.72) 100%);
+      pointer-events: none;
+      z-index: 1;
+    }
+
+    .pill {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      padding: 4px 9px;
+      border-radius: 999px;
+      font-size: 0.6rem;
+      font-weight: 600;
+      letter-spacing: 0.09em;
+      text-transform: uppercase;
+      backdrop-filter: blur(12px);
+    }
+
+    #status-pill {
+      background: rgba(20,38,20,0.72);
+      color: rgba(120,210,120,0.9);
+      border: 1px solid rgba(40,70,40,0.5);
+      transition: background 0.3s, color 0.3s, border-color 0.3s;
+    }
+    #status-pill.connecting { background: rgba(18,18,36,0.72); color: rgba(100,150,210,0.9); border-color: rgba(40,40,70,0.5); }
+    #status-pill.error      { background: rgba(36,18,18,0.72); color: rgba(210,100,100,0.9); border-color: rgba(70,40,40,0.5); }
+
+    .dot { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+    #status-pill.connected .dot { animation: pulse 1.6s ease-in-out infinite; }
+
+    @keyframes pulse {
+      0%,100% { opacity: 1; }
+      50%      { opacity: 0.35; }
+    }
+
+    /* ── Globe ── */
+    #globe-wrap {
+      position: fixed;
+      inset: 0;
+      z-index: 0;
+    }
+
+    /* ── Recent strikes sidebar ── */
+    #sidebar {
+      position: fixed;
+      top: 48px;
+      right: 14px;
+      width: 228px;
+      background: rgba(7,5,2,0.88);
+      border: 1px solid rgba(210,160,50,0.1);
+      border-radius: 10px;
+      z-index: 900;
+      backdrop-filter: blur(16px);
+      overflow: hidden;
+    }
+
+    #sidebar h2 {
+      font-size: 0.57rem;
+      text-transform: uppercase;
+      letter-spacing: 0.14em;
+      color: rgba(255,255,255,0.2);
+      padding: 9px 12px 7px;
+      border-bottom: 1px solid rgba(255,255,255,0.05);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      cursor: pointer;
+      user-select: none;
+    }
+    #sidebar.collapsed h2 { border-bottom: none; }
+    #sidebar.collapsed #strike-list { display: none; }
+    .sidebar-chevron {
+      margin-left: auto;
+      font-size: 0.5rem;
+      color: rgba(255,255,255,0.12);
+      transition: transform 0.2s;
+      flex-shrink: 0;
+    }
+    #sidebar:not(.collapsed) .sidebar-chevron { transform: rotate(180deg); }
+    #strike-dots { flex: 1; display: flex; gap: 3px; align-items: center; height: 8px; overflow: hidden; }
+    #sidebar:not(.collapsed) #strike-dots { visibility: hidden; }
+    .strike-dot { width: 4px; height: 4px; border-radius: 50%; background: rgba(220,168,48,0.65); flex-shrink: 0; animation: dotFade 2.5s ease-out forwards; }
+    @keyframes dotFade { from { opacity: 1; } to { opacity: 0; } }
+
+    /* User location marker */
+    .user-marker {
+      width: 11px; height: 11px;
+      border: 2px solid rgba(255,255,255,0.9);
+      border-radius: 50%;
+      background: rgba(220,168,48,0.9);
+      box-shadow: 0 0 6px rgba(220,168,48,0.6);
+      animation: markerPulse 2.2s ease-in-out infinite;
+      pointer-events: none;
+    }
+    @keyframes markerPulse {
+      0%,100% { box-shadow: 0 0 4px rgba(220,168,48,0.5); transform: scale(1); }
+      50%      { box-shadow: 0 0 14px rgba(220,168,48,0.9); transform: scale(1.2); }
+    }
+
+    /* ── Strike vis effects ── */
+    .strike-flash {
+      width: 12px; height: 12px;
+      border-radius: 50%;
+      background: #fff8d0;
+      box-shadow: 0 0 12px 6px rgba(220,168,48,0.9);
+      animation: flashFade 0.75s ease-out forwards;
+      pointer-events: none;
+      margin: -6px 0 0 -6px;
+    }
+    @keyframes flashFade {
+      0%   { opacity: 1; transform: scale(3); }
+      100% { opacity: 0; transform: scale(0.2); }
+    }
+    .strike-glow {
+      width: 64px; height: 64px;
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(240,200,100,0.7) 0%, rgba(220,168,48,0.2) 45%, transparent 70%);
+      animation: glowFade 1.6s ease-out forwards;
+      pointer-events: none;
+      margin: -32px 0 0 -32px;
+    }
+    @keyframes glowFade {
+      0%   { opacity: 0; transform: scale(0.1); }
+      12%  { opacity: 1; }
+      100% { opacity: 0; transform: scale(2.2); }
+    }
+
+    #hud {
+      position: fixed;
+      top: 14px;
+      right: 14px;
+      z-index: 900;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    #hud-stats {
+      font-size: 0.64rem;
+      color: rgba(255,255,255,0.25);
+      font-variant-numeric: tabular-nums;
+      letter-spacing: 0.02em;
+    }
+    #count-total { color: rgba(220,168,48,0.55); font-weight: 600; }
+    .hud-sep { margin: 0 5px; opacity: 0.2; }
+    .hud-label { font-size: 0.57rem; opacity: 0.5; }
+    #brand {
+      position: fixed;
+      bottom: 14px;
+      right: 16px;
+      z-index: 900;
+      font-size: 0.52rem;
+      letter-spacing: 0.28em;
+      text-transform: uppercase;
+      color: rgba(220,168,48,0.15);
+      user-select: none;
+      pointer-events: none;
+    }
+
+    /* ── Collapsible panels ── */
+    .panel { position: fixed; z-index: 900; background: rgba(7,5,2,0.88); border: 1px solid rgba(210,160,50,0.1); border-radius: 10px; backdrop-filter: blur(16px); overflow: hidden; min-width: 172px; }
+    .panel-hdr { display: flex; align-items: center; gap: 6px; padding: 9px 12px; cursor: pointer; user-select: none; }
+    .panel-title { font-size: 0.57rem; letter-spacing: 0.14em; text-transform: uppercase; color: rgba(255,255,255,0.2); }
+    .panel-chev { margin-left: auto; font-size: 0.5rem; color: rgba(255,255,255,0.12); transition: transform 0.2s; }
+    .panel.open .panel-chev { transform: rotate(180deg); }
+    .panel-body { display: none; padding: 0 10px 10px; }
+    .panel.open .panel-body { display: block; }
+    #vis-panel { top: 14px; left: 14px; }
+    #vis-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }
+    .vis-btn { background: rgba(255,255,255,0.03); border: 1px solid rgba(210,160,50,0.1); border-radius: 6px; color: rgba(255,255,255,0.28); font-size: 0.64rem; font-weight: 500; padding: 6px 4px; cursor: pointer; text-align: center; transition: all 0.15s; letter-spacing: 0.04em; }
+    .vis-btn:hover  { background: rgba(255,255,255,0.07); color: rgba(255,255,255,0.65); }
+    .vis-btn.active { background: rgba(220,168,48,0.1); color: rgba(220,168,48,0.9); border-color: rgba(220,168,48,0.3); }
+    #sound-panel { bottom: 14px; left: 14px; }
+    #mode-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; margin-bottom: 7px; }
+    .mode-btn { background: rgba(255,255,255,0.03); border: 1px solid rgba(210,160,50,0.1); border-radius: 6px; color: rgba(255,255,255,0.28); font-size: 0.64rem; font-weight: 500; padding: 6px 4px; cursor: pointer; text-align: center; transition: all 0.15s; letter-spacing: 0.04em; }
+    .mode-btn:hover  { background: rgba(255,255,255,0.07); color: rgba(255,255,255,0.65); }
+    .mode-btn.active { background: rgba(220,168,48,0.1); color: rgba(220,168,48,0.9); border-color: rgba(220,168,48,0.3); }
+    #mode-desc { font-size: 0.58rem; color: rgba(255,255,255,0.2); line-height: 1.55; min-height: 2.8em; }
+    #mute-btn { background: none; border: none; cursor: pointer; font-size: 0.78rem; padding: 0 2px; line-height: 1; opacity: 0.45; transition: opacity 0.15s; }
+    #mute-btn:hover { opacity: 0.9; }
+    #mute-btn.muted { opacity: 0.18; }
+    #custom-assign { display: none; margin-top: 7px; padding-top: 7px; border-top: 1px solid rgba(255,255,255,0.06); }
+    .assign-row { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+    .assign-row:last-child { margin-bottom: 0; }
+    .assign-dim { font-size: 0.58rem; color: rgba(255,255,255,0.22); width: 28px; flex-shrink: 0; text-transform: uppercase; letter-spacing: 0.07em; }
+    .assign-sel { flex: 1; background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.09); border-radius: 5px; color: rgba(255,255,255,0.55); font-size: 0.63rem; padding: 3px 18px 3px 6px; cursor: pointer; appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5'%3E%3Cpath d='M0 0l4 5 4-5z' fill='%23555'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 5px center; }
+    .assign-sel:focus { outline: none; border-color: rgba(220,168,48,0.4); }
+
+    #strike-list { list-style: none; max-height: 320px; overflow-y: auto; }
+    #strike-list::-webkit-scrollbar { width: 3px; }
+    #strike-list::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 2px; }
+
+    #strike-list li {
+      padding: 5px 12px;
+      font-size: 0.67rem;
+      border-bottom: 1px solid rgba(255,255,255,0.04);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 6px;
+      animation: slideIn 0.2s ease-out;
+    }
+    #strike-list li:last-child { border-bottom: none; }
+    .coord { color: rgba(180,180,200,0.55); font-variant-numeric: tabular-nums; flex-shrink: 0; }
+    .dist { color: rgba(220,168,48,0.75); font-weight: 600; white-space: nowrap; }
+    .ts { color: rgba(255,255,255,0.18); white-space: nowrap; font-variant-numeric: tabular-nums; }
+
+    @keyframes slideIn {
+      from { opacity: 0; transform: translateX(8px); }
+      to   { opacity: 1; transform: translateX(0); }
+    }
+
+    /* ── Rate chart ── */
+    #rate-bar-wrap {
+      position: fixed;
+      bottom: 14px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 900;
+      display: flex;
+      align-items: flex-end;
+      gap: 2px;
+      padding: 6px 10px 4px;
+      background: rgba(7,5,2,0.72);
+      border: 1px solid rgba(210,160,50,0.08);
+      border-radius: 8px;
+      backdrop-filter: blur(12px);
+    }
+    .rate-col { width: 5px; border-radius: 2px 2px 0 0; background: rgba(220,168,48,0.5); transition: height 0.4s ease; min-height: 2px; }
+
+  </style>
+</head>
+<body>
+
+<div id="hud">
+  <div class="pill connecting" id="status-pill">
+    <div class="dot"></div>
+    <span id="status-text">Connecting…</span>
+  </div>
+  <div id="hud-stats">
+    <span id="count-total">0</span><span class="hud-sep">·</span><span id="count-rate">—</span><span class="hud-label">/min</span>
+  </div>
+</div>
+
+<div id="globe-wrap"></div>
+
+<div id="sidebar" class="collapsed">
+  <h2 id="sidebar-header">
+    <span>Recent strikes</span>
+    <span id="strike-dots"></span>
+    <span class="sidebar-chevron">▲</span>
+  </h2>
+  <ul id="strike-list"></ul>
+</div>
+
+<div id="vis-panel" class="panel">
+  <div class="panel-hdr" id="vis-hdr">
+    <span class="panel-title">Strike</span>
+    <span class="panel-chev">▼</span>
+  </div>
+  <div class="panel-body">
+    <div id="vis-grid"></div>
+  </div>
+</div>
+
+<div id="rate-bar-wrap"></div>
+
+<div id="sound-panel" class="panel">
+  <div class="panel-hdr" id="snd-hdr">
+    <span class="panel-title">Sound</span>
+    <button id="mute-btn" title="Mute / unmute">🔊</button>
+    <span class="panel-chev">▼</span>
+  </div>
+  <div class="panel-body">
+    <div id="mode-grid"></div>
+    <div id="mode-desc"></div>
+    <div id="custom-assign"></div>
+  </div>
+</div>
+<div id="brand">⚡ LIGHTNING</div>
+
+<script>
+// ── User location ─────────────────────────────────────────────────────────
+let userLat = null, userLon = null;
+
+function initLocation() {
+  if (navigator.geolocation) {
+    navigator.geolocation.getCurrentPosition(
+      pos => {
+        userLat = pos.coords.latitude; userLon = pos.coords.longitude;
+        console.log(`[Location] GPS: ${userLat.toFixed(3)}, ${userLon.toFixed(3)}`);
+        updateUserMarker();
+      },
+      () => fetchIPLocation(),
+      { enableHighAccuracy: true, timeout: 8000 }
+    );
+  } else {
+    fetchIPLocation();
+  }
+}
+
+async function fetchIPLocation() {
+  // Try two services in sequence; validate before accepting
+  const services = [
+    r => ({ lat: r.latitude,  lon: r.longitude  }), // ipwho.is
+    r => ({ lat: r.latitude,  lon: r.longitude  }), // ipapi.co
+  ];
+  const urls = ["https://ipwho.is/", "https://ipapi.co/json/"];
+  for (let i = 0; i < urls.length; i++) {
+    try {
+      const d = await fetch(urls[i]).then(r => r.json());
+      const { lat, lon } = services[i](d);
+      if (typeof lat === "number" && typeof lon === "number" &&
+          lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180 &&
+          !(lat === 0 && lon === 0)) {
+        userLat = lat; userLon = lon;
+        console.log(`[Location] IP-based: ${lat.toFixed(3)}, ${lon.toFixed(3)} (via ${urls[i]})`);
+        updateUserMarker();
+        return;
+      }
+    } catch {}
+  }
+  console.warn("[Location] Could not determine location — distances unavailable");
+}
+
+// Haversine distance in km
+function haversine(lat1, lon1, lat2, lon2) {
+  const R = 6371;
+  const toRad = x => x * Math.PI / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a = Math.sin(dLat / 2) ** 2
+          + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  return R * 2 * Math.asin(Math.sqrt(a));
+}
+
+function formatDist(km) {
+  if (km < 1) return "<1 km";
+  return `${Math.round(km).toLocaleString()} km`;
+}
+
+initLocation();
+
+// ── Globe ─────────────────────────────────────────────────────────────────
+const wrap = document.getElementById("globe-wrap");
+
+const globe = Globe({ animateIn: false })(wrap)
+  .globeImageUrl("//unpkg.com/three-globe/example/img/earth-blue-marble.jpg")
+  .backgroundImageUrl(null)
+  .showAtmosphere(true)
+  .atmosphereColor("#7a4200")
+  .atmosphereAltitude(0.08)
+  .showGraticules(false)
+  .width(wrap.offsetWidth)
+  .height(wrap.offsetHeight)
+  .ringsData([])
+  .ringLat(d => d.lat)
+  .ringLng(d => d.lon)
+  .ringAltitude(0.008)
+  .ringColor(() => t => `rgba(220,168,48,${Math.max(0, 1 - t * 1.4)})`)
+  .ringMaxRadius(3)
+  .ringPropagationSpeed(4)
+  .ringRepeatPeriod(700)
+  .arcsData([])
+  .arcStartLat(d => d.sLat).arcStartLng(d => d.sLon)
+  .arcEndLat(d => d.eLat).arcEndLng(d => d.eLon)
+  .arcColor(() => ["rgba(220,168,48,0)", "rgba(220,168,48,1)"])
+  .arcStroke(0.5).arcAltitude(0.55)
+  .arcDashLength(0.3).arcDashGap(0.7).arcDashAnimateTime(800);
+
+// Terrain texture tinted warm sepia — material color multiplies the Blue Marble texture
+const mat = globe.globeMaterial();
+// Warm brown multiplier: blue ocean × low-blue = near-black; tan/green land stays lighter
+mat.color.set("#7a4e22");
+mat.emissive.set("#060400");
+mat.emissiveIntensity = 0.06;
+
+// Polygon overlay removed — Blue Marble texture provides terrain detail
+
+// Slow auto-rotate, pause while user interacts
+const controls = globe.controls();
+controls.autoRotate = true;
+controls.autoRotateSpeed = 0.25;
+let rotateTimer;
+wrap.addEventListener("pointerdown", () => { controls.autoRotate = false; clearTimeout(rotateTimer); });
+wrap.addEventListener("pointerup",   () => { rotateTimer = setTimeout(() => controls.autoRotate = true, 3000); });
+
+window.addEventListener("resize", () => {
+  globe.width(wrap.offsetWidth).height(wrap.offsetHeight);
+});
+
+// ── Canvas effects overlay ────────────────────────────────────────────────
+// Globe.gl's htmlElementsData doesn't project correctly, so we draw
+// user marker + strike effects on a canvas overlay using the Three.js camera.
+const effectCanvas = document.createElement("canvas");
+effectCanvas.id = "effects-canvas";
+effectCanvas.style.cssText = "position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:800;";
+wrap.appendChild(effectCanvas);
+const ectx = effectCanvas.getContext("2d");
+
+function syncCanvasSize() {
+  effectCanvas.width  = wrap.offsetWidth;
+  effectCanvas.height = wrap.offsetHeight;
+}
+syncCanvasSize();
+window.addEventListener("resize", syncCanvasSize);
+
+// globe.gl's polar2Cartesian: theta = (90 - lon) not (lon + 180)
+function latLonToXYZ(lat, lon, alt = 0) {
+  const phi   = (90 - lat) * Math.PI / 180;
+  const theta = (90 - lon) * Math.PI / 180;
+  const r = 100 * (1 + alt);
+  return [
+    r * Math.sin(phi) * Math.cos(theta),
+    r * Math.cos(phi),
+    r * Math.sin(phi) * Math.sin(theta),
+  ];
+}
+
+// Projects a globe-surface (or altitude) point to canvas px coords.
+// Returns null if point is on the back hemisphere or behind the camera.
+function projectLatLon(lat, lon, alt = 0) {
+  const [wx, wy, wz] = latLonToXYZ(lat, lon, alt);
+
+  // Hemisphere check — skip points facing away from camera
+  const cam   = globe.camera();
+  const cp    = cam.position;
+  const cdLen = Math.sqrt(cp.x*cp.x + cp.y*cp.y + cp.z*cp.z);
+  const dot   = (wx/100)*(cp.x/cdLen) + (wy/100)*(cp.y/cdLen) + (wz/100)*(cp.z/cdLen);
+  if (dot < -0.05) return null;
+
+  // Full MVP projection using Three.js matrix elements (column-major)
+  const mv = cam.matrixWorldInverse.elements;
+  const vx = mv[0]*wx + mv[4]*wy + mv[8]*wz  + mv[12];
+  const vy = mv[1]*wx + mv[5]*wy + mv[9]*wz  + mv[13];
+  const vz = mv[2]*wx + mv[6]*wy + mv[10]*wz + mv[14];
+  const vw = mv[3]*wx + mv[7]*wy + mv[11]*wz + mv[15];
+
+  const pr = cam.projectionMatrix.elements;
+  const cx = pr[0]*vx + pr[4]*vy + pr[8]*vz  + pr[12]*vw;
+  const cy = pr[1]*vx + pr[5]*vy + pr[9]*vz  + pr[13]*vw;
+  const cz = pr[2]*vx + pr[6]*vy + pr[10]*vz + pr[14]*vw;
+  const cw = pr[3]*vx + pr[7]*vy + pr[11]*vz + pr[15]*vw;
+  if (!cw || cz/cw >= 1) return null;
+
+  const ndx = cx/cw, ndy = cy/cw;
+  return {
+    x: (ndx * 0.5 + 0.5) * effectCanvas.width,
+    y: (-ndy * 0.5 + 0.5) * effectCanvas.height,
+  };
+}
+
+// Canvas effect pool
+let canvasEffects = [];
+let effectLoopRunning = false;
+
+function addCanvasEffect(type, lat, lon, dur, extra = {}) {
+  canvasEffects.push({ type, lat, lon, start: performance.now(), dur, ...extra });
+}
+
+function startEffectLoop() {
+  if (!effectLoopRunning) { effectLoopRunning = true; requestAnimationFrame(effectTick); }
+}
+
+function effectTick() {
+  const now = performance.now();
+  ectx.clearRect(0, 0, effectCanvas.width, effectCanvas.height);
+
+  // User marker (always drawn when location is known)
+  if (userLat !== null) {
+    const p = projectLatLon(userLat, userLon);
+    if (p) {
+      const pulse = 0.5 + 0.5 * Math.sin(now * 0.0015 * Math.PI * 2);
+      const outerR = 5 + pulse * 2.5;
+      const g = ectx.createRadialGradient(p.x, p.y, 0, p.x, p.y, outerR);
+      g.addColorStop(0,   "rgba(220,168,48,0.22)");
+      g.addColorStop(1,   "rgba(220,168,48,0)");
+      ectx.beginPath(); ectx.arc(p.x, p.y, outerR, 0, Math.PI*2);
+      ectx.fillStyle = g; ectx.fill();
+      ectx.beginPath(); ectx.arc(p.x, p.y, 2, 0, Math.PI*2);
+      ectx.fillStyle = "rgba(220,168,48,0.55)"; ectx.fill();
+    }
+  }
+
+  // Transient strike effects
+  canvasEffects = canvasEffects.filter(e => now - e.start < e.dur);
+  canvasEffects.forEach(e => {
+    const t = (now - e.start) / e.dur;
+    if (e.type === "flash") {
+      const p = projectLatLon(e.lat, e.lon);
+      if (!p) return;
+      const alpha = Math.max(0, 1 - t);
+      const r = 5 + t * 12;
+      ectx.beginPath(); ectx.arc(p.x, p.y, r, 0, Math.PI*2);
+      ectx.fillStyle = `rgba(255,255,220,${alpha * 0.65})`;
+      ectx.fill();
+      ectx.strokeStyle = `rgba(220,168,48,${alpha})`;
+      ectx.lineWidth = 2 - t;
+      ectx.stroke();
+    } else if (e.type === "glow") {
+      const p = projectLatLon(e.lat, e.lon);
+      if (!p) return;
+      const alpha = t < 0.15 ? t/0.15 : Math.max(0, 1 - (t-0.15)/0.85);
+      const r = 8 + t * 52;
+      const g = ectx.createRadialGradient(p.x, p.y, 0, p.x, p.y, r);
+      g.addColorStop(0,    `rgba(240,200,100,${alpha * 0.8})`);
+      g.addColorStop(0.35, `rgba(220,168,48,${alpha * 0.35})`);
+      g.addColorStop(1,    "rgba(220,168,48,0)");
+      ectx.beginPath(); ectx.arc(p.x, p.y, r, 0, Math.PI*2);
+      ectx.fillStyle = g; ectx.fill();
+    } else if (e.type === "spike") {
+      const eased = Math.pow(Math.max(0, 1 - t), 1.2);
+      const tip  = projectLatLon(e.lat, e.lon, 0.45 * eased);
+      const base = projectLatLon(e.lat, e.lon, 0.005);
+      if (!tip || !base) return;
+      const alpha = Math.max(0, 1 - t * 1.1);
+      const g = ectx.createLinearGradient(base.x, base.y, tip.x, tip.y);
+      g.addColorStop(0,   `rgba(220,168,48,${alpha})`);
+      g.addColorStop(0.5, `rgba(235,195,100,${alpha * 0.6})`);
+      g.addColorStop(1,   `rgba(255,255,255,${alpha * 0.1})`);
+      ectx.beginPath(); ectx.moveTo(base.x, base.y); ectx.lineTo(tip.x, tip.y);
+      ectx.strokeStyle = g;
+      ectx.lineWidth = Math.max(0.8, 2.5 * (1 - t));
+      ectx.lineCap = "round"; ectx.stroke();
+      ectx.beginPath(); ectx.arc(base.x, base.y, 3, 0, Math.PI*2);
+      ectx.fillStyle = `rgba(220,168,48,${alpha * 0.8})`; ectx.fill();
+    } else if (e.type === "comet") {
+      // Start: high altitude (0.7) above a point 10° offset from strike
+      // End: strike surface — projects genuinely "from space to ground"
+      const sLat = e.lat + Math.cos(e.a) * 10;
+      const sLon = e.lon + Math.sin(e.a) * 10;
+      const startPt = projectLatLon(sLat, sLon, 0.7);
+      const endPt   = projectLatLon(e.lat, e.lon, 0.005);
+      if (!startPt || !endPt) return;
+
+      // Animated head position (0 = at start, 1 = at strike)
+      const headX = startPt.x + (endPt.x - startPt.x) * t;
+      const headY = startPt.y + (endPt.y - startPt.y) * t;
+
+      // Trail fades 40% of path behind the head
+      const trailT  = Math.max(0, t - 0.4);
+      const trailX  = startPt.x + (endPt.x - startPt.x) * trailT;
+      const trailY  = startPt.y + (endPt.y - startPt.y) * trailT;
+
+      const fadeOut = t > 0.88 ? Math.max(0, 1 - (t - 0.88) / 0.12) : 1;
+      const tg = ectx.createLinearGradient(trailX, trailY, headX, headY);
+      tg.addColorStop(0,   "rgba(220,168,48,0)");
+      tg.addColorStop(0.5, `rgba(220,168,48,${0.28 * fadeOut})`);
+      tg.addColorStop(1,   `rgba(255,245,180,${fadeOut})`);
+      ectx.beginPath(); ectx.moveTo(trailX, trailY); ectx.lineTo(headX, headY);
+      ectx.strokeStyle = tg; ectx.lineWidth = 1.8; ectx.lineCap = "round"; ectx.stroke();
+
+      // Head glow
+      ectx.beginPath(); ectx.arc(headX, headY, 2.5, 0, Math.PI*2);
+      ectx.fillStyle = `rgba(255,250,200,${fadeOut})`; ectx.fill();
+
+      // Impact flash at surface when head arrives
+      if (t > 0.85) {
+        const ft = (t - 0.85) / 0.15;
+        const fa = Math.max(0, 1 - ft) * 0.75;
+        ectx.beginPath(); ectx.arc(endPt.x, endPt.y, ft * 14, 0, Math.PI*2);
+        ectx.fillStyle = `rgba(240,200,100,${fa * 0.3})`; ectx.fill();
+        ectx.strokeStyle = `rgba(220,168,48,${fa})`; ectx.lineWidth = 1.5; ectx.stroke();
+      }
+    }
+  });
+
+  if (userLat !== null || canvasEffects.length > 0) {
+    requestAnimationFrame(effectTick);
+  } else {
+    effectLoopRunning = false;
+  }
+}
+
+function updateUserMarker() {
+  if (userLat === null) return;
+  startEffectLoop();
+}
+
+// Sidebar toggle
+document.getElementById("sidebar-header").addEventListener("click", () => {
+  document.getElementById("sidebar").classList.toggle("collapsed");
+});
+
+// Strike rings
+let rings = [];
+function addRing(lat, lon) {
+  const r = { lat, lon };
+  rings = [...rings, r];
+  globe.ringsData(rings);
+  // 3 pulses × 700 ms + small buffer
+  setTimeout(() => {
+    rings = rings.filter(x => x !== r);
+    globe.ringsData(rings);
+  }, 2200);
+}
+
+// ── Strike visualisation modes ────────────────────────────────────────────
+let currentVisMode = "spike";
+let arcs = [];
+
+const RING_PRESETS = {
+  ring:  { maxRadius: 3, speed: 4, period: 700,  alpha: t => Math.max(0, 1 - t * 1.4)  },
+  halo:  { maxRadius: 9, speed: 1.8, period: 5000, alpha: t => Math.max(0, 1 - t * 0.8) },
+  burst: { maxRadius: 3, speed: 5, period: 550,  alpha: t => Math.max(0, 1 - t * 1.4)  },
+};
+
+function applyRingPreset(name) {
+  const p = RING_PRESETS[name] || RING_PRESETS.ring;
+  globe
+    .ringMaxRadius(p.maxRadius)
+    .ringPropagationSpeed(p.speed)
+    .ringRepeatPeriod(p.period)
+    .ringColor(() => t => `rgba(220,168,48,${p.alpha(t)})`);
+}
+
+
+const VIS_MODES = {
+  ring: {
+    name: "Ring",
+    onActivate() { applyRingPreset("ring"); },
+    addStrike(lat, lon) {
+      const r = { lat, lon };
+      rings = [...rings, r]; globe.ringsData(rings);
+      setTimeout(() => { rings = rings.filter(x => x !== r); globe.ringsData(rings); }, 2200);
+    },
+  },
+  halo: {
+    name: "Halo",
+    onActivate() { applyRingPreset("halo"); },
+    addStrike(lat, lon) {
+      const r = { lat, lon };
+      rings = [...rings, r]; globe.ringsData(rings);
+      setTimeout(() => { rings = rings.filter(x => x !== r); globe.ringsData(rings); }, 5000);
+    },
+  },
+  flash: {
+    name: "Flash",
+    onActivate() {},
+    addStrike(lat, lon) { addCanvasEffect("flash", lat, lon, 800); startEffectLoop(); },
+  },
+  spike: {
+    name: "Spike",
+    onActivate() {},
+    addStrike(lat, lon) { addCanvasEffect("spike", lat, lon, 1600); startEffectLoop(); },
+  },
+  burst: {
+    name: "Burst",
+    onActivate() { applyRingPreset("burst"); },
+    addStrike(lat, lon) {
+      for (let i = 0; i < 5; i++) {
+        setTimeout(() => {
+          const r = { lat, lon };
+          rings = [...rings, r]; globe.ringsData(rings);
+          setTimeout(() => { rings = rings.filter(x => x !== r); globe.ringsData(rings); }, 2200);
+        }, i * 115);
+      }
+    },
+  },
+  comet: {
+    name: "Comet",
+    onActivate() {},
+    addStrike(lat, lon) {
+      addCanvasEffect("comet", lat, lon, 1600, { a: Math.random() * Math.PI * 2 });
+      startEffectLoop();
+    },
+  },
+  glow: {
+    name: "Glow",
+    onActivate() {},
+    addStrike(lat, lon) { addCanvasEffect("glow", lat, lon, 1700); startEffectLoop(); },
+  },
+};
+
+function switchVisMode(key) {
+  currentVisMode = key;
+  rings = []; globe.ringsData(rings);
+  arcs  = []; globe.arcsData(arcs);
+  canvasEffects = [];
+  VIS_MODES[key].onActivate();
+  document.querySelectorAll(".vis-btn").forEach(b =>
+    b.classList.toggle("active", b.dataset.vis === key));
+}
+
+// Vis panel init
+(function initVisPanel() {
+  const grid = document.getElementById("vis-grid");
+  Object.entries(VIS_MODES).forEach(([key, mode]) => {
+    const btn = document.createElement("button");
+    btn.className = "vis-btn" + (key === currentVisMode ? " active" : "");
+    btn.textContent = mode.name;
+    btn.dataset.vis = key;
+    btn.addEventListener("click", () => switchVisMode(key));
+    grid.appendChild(btn);
+  });
+  applyRingPreset("ring"); // apply defaults
+})();
+
+// Panel collapse toggles
+document.getElementById("vis-hdr").addEventListener("click", () =>
+  document.getElementById("vis-panel").classList.toggle("open"));
+document.getElementById("snd-hdr").addEventListener("click", e => {
+  if (e.target.id === "mute-btn") return;
+  document.getElementById("sound-panel").classList.toggle("open");
+});
+
+// ── State ─────────────────────────────────────────────────────────────────
+let totalStrikes = 0;
+const recentTimes = [];
+const RATE_WINDOW = 60_000;
+
+// Rate-chart buckets (30 s, one per second; only 29 rendered — skip current)
+const BUCKETS = 30;
+const RENDER_BUCKETS = BUCKETS - 1; // far-right bar is always 0 (current filling)
+const buckets = new Array(BUCKETS).fill(0);
+let currentBucket = 0;
+
+// ── Rate chart DOM ─────────────────────────────────────────────────────────
+const rateBarWrap = document.getElementById("rate-bar-wrap");
+const rateCols = [];
+for (let i = 0; i < RENDER_BUCKETS; i++) {
+  const col = document.createElement("div");
+  col.className = "rate-col";
+  col.style.height = "2px";
+  rateBarWrap.appendChild(col);
+  rateCols.push(col);
+}
+
+setInterval(() => {
+  currentBucket = (currentBucket + 1) % BUCKETS;
+  buckets[currentBucket] = 0;
+  renderRateChart();
+}, 1000);
+
+const CHART_MAX = 20;
+const MAX_H = 40;
+
+function renderRateChart() {
+  for (let i = 0; i < RENDER_BUCKETS; i++) {
+    // oldest completed → newest completed, skipping currentBucket
+    const idx = (currentBucket + 1 + i) % BUCKETS;
+    const h = Math.max(2, Math.min(MAX_H, Math.round((buckets[idx] / CHART_MAX) * MAX_H)));
+    rateCols[i].style.height = h + "px";
+  }
+}
+
+// ── Strike handler ────────────────────────────────────────────────────────
+function onStrike(lat, lon) {
+  const now = Date.now();
+  totalStrikes++;
+  recentTimes.push(now);
+  while (recentTimes.length && recentTimes[0] < now - RATE_WINDOW) recentTimes.shift();
+  buckets[currentBucket]++;
+
+  VIS_MODES[currentVisMode].addStrike(lat, lon);
+  addStrikeDot();
+
+  document.getElementById("count-total").textContent = totalStrikes.toLocaleString();
+  document.getElementById("count-rate").textContent = recentTimes.length;
+
+  const distKm = (userLat !== null) ? haversine(userLat, userLon, lat, lon) : null;
+  const dist = distKm !== null ? formatDist(distKm) : null;
+  maybePlayNote(lat, lon, distKm);
+
+  const ts = new Date().toLocaleTimeString("en-GB", {
+    hour: "2-digit", minute: "2-digit", second: "2-digit"
+  });
+
+  const list = document.getElementById("strike-list");
+  const li = document.createElement("li");
+  li.innerHTML = `
+    <span class="coord">${lat.toFixed(3)}, ${lon.toFixed(3)}</span>
+    <span class="strike-meta">
+      ${dist ? `<span class="dist">${dist}</span>` : ""}
+      <span class="ts">${ts}</span>
+    </span>`;
+  list.prepend(li);
+  while (list.children.length > 30) list.lastChild.remove();
+}
+
+// Strike dot indicator (shown on collapsed sidebar)
+function addStrikeDot() {
+  const container = document.getElementById("strike-dots");
+  const dot = document.createElement("span");
+  dot.className = "strike-dot";
+  container.appendChild(dot);
+  // Remove after animation finishes; also cap at 30 dots
+  setTimeout(() => dot.remove(), 2500);
+  while (container.children.length > 30) container.firstChild.remove();
+}
+
+// ── Audio ─────────────────────────────────────────────────────────────────
+// Pentatonic major (C3–C6) — every interval consonant
+const PENTA = [
+  65.41, 73.42, 82.41, 98.00, 110.00,
+  130.81, 146.83, 164.81, 196.00, 220.00,
+  261.63, 293.66, 329.63, 392.00, 440.00,
+  523.25, 587.33, 659.26, 783.99, 880.00,
+  1046.50, 1174.66,
+];
+
+function distToFreq(km) {
+  const t = Math.min(1, Math.log1p(km) / Math.log1p(10_000));
+  return PENTA[Math.round((1-t) * (PENTA.length-1))];
+}
+
+function semis(base, n) { return base * Math.pow(2, n/12); }
+
+const CHORD_SHAPES = {
+  minor: [0,3,7],
+  major: [0,4,7],
+  sus2:  [0,2,7],
+  maj7:  [0,4,7,11],
+};
+
+// ── Assignable parameters (for Custom mode) ────────────────────────────────
+const PARAMS = {
+  pitch:     { name: "Pitch",     desc: "Pentatonic note (0=low, 1=high)",   apply(t, s) { s.freq = PENTA[Math.round(t*(PENTA.length-1))]; } },
+  pan:       { name: "Pan",       desc: "Stereo position (0=left, 1=right)", apply(t, s) { s.pan = t*2-1; } },
+  decay:     { name: "Decay",     desc: "Note length 0.2 → 4 s",             apply(t, s) { s.decay = 0.2 + t*3.8; } },
+  attack:    { name: "Attack",    desc: "Onset 5 ms → 1.5 s",               apply(t, s) { s.attack = 0.005 + t*1.495; } },
+  overtones: { name: "Overtones", desc: "Harmonics 1 → 5",                   apply(t, s) { s.overtones = 1 + Math.round(t*4); } },
+  chord:     { name: "Chord",     desc: "none → minor → major → sus2 → maj7",apply(t, s) { const sh=[null,"minor","major","sus2","maj7"]; s.chord=sh[Math.min(4,Math.floor(t*5))]; } },
+  echo:      { name: "Echo",      desc: "Reverb repeats 0 → 4",              apply(t, s) { s.echo = Math.round(t*4); } },
+  chorus:    { name: "Chorus",    desc: "Detune spread 0 → 20 ¢",            apply(t, s) { s.chorus = t*20; } },
+  tremolo:   { name: "Tremolo",   desc: "Amplitude wobble 0 → 16 Hz",        apply(t, s) { s.tremolo = t*16; } },
+  volume:    { name: "Volume",    desc: "Output level 20 → 100%",            apply(t, s) { s.volume = 0.2 + t * 0.8; } },
+};
+
+// Default custom assignments: dist→pitch, lat→decay, lon→pan
+let customAssign = { dist: "pitch", lat: "decay", lon: "pan" };
+
+// ── Custom note renderer ───────────────────────────────────────────────────
+function playCustomNote(s, ctx) {
+  const now = ctx.currentTime;
+  const dur = s.attack + s.decay;
+
+  const master = ctx.createGain();
+  master.gain.value = Math.max(0, s.volume);
+  master.connect(ctx.destination);
+
+  const panner = ctx.createStereoPanner();
+  panner.pan.value = s.pan;
+  panner.connect(master);
+
+  let lfoGain = null;
+  if (s.tremolo > 0.3) {
+    const lfo = ctx.createOscillator(), lg = ctx.createGain();
+    lfo.frequency.value = s.tremolo; lfo.type = "sine"; lg.gain.value = 0.04;
+    lfo.connect(lg); lfo.start(now); lfo.stop(now+dur);
+    lfoGain = lg;
+  }
+
+  function makeOsc(freq, amp) {
+    const freqList = s.chorus > 0 ? [freq, freq*Math.pow(2, s.chorus/1200)] : [freq];
+    freqList.forEach(f => {
+      const osc = ctx.createOscillator(), env = ctx.createGain();
+      osc.connect(env); env.connect(panner);
+      if (lfoGain) lfoGain.connect(env.gain);
+      osc.type = "sine"; osc.frequency.value = f;
+      const a = amp / freqList.length;
+      env.gain.setValueAtTime(0, now);
+      env.gain.linearRampToValueAtTime(a, now+s.attack);
+      env.gain.exponentialRampToValueAtTime(0.0001, now+dur);
+      osc.start(now); osc.stop(now+dur);
+    });
+  }
+
+  if (s.chord) {
+    CHORD_SHAPES[s.chord].forEach(n => makeOsc(semis(s.freq, n), 0.08));
+  } else {
+    for (let h = 1; h <= s.overtones; h++) makeOsc(s.freq*h, 0.12/(h*h));
+  }
+
+  for (let e = 1; e <= s.echo; e++) {
+    const t = now + e*0.3, amp = 0.08*Math.pow(0.45,e);
+    const osc = ctx.createOscillator(), env = ctx.createGain();
+    osc.connect(env); env.connect(panner);
+    osc.type = "sine"; osc.frequency.value = s.freq;
+    env.gain.setValueAtTime(0, t);
+    env.gain.linearRampToValueAtTime(amp, t+0.006);
+    env.gain.exponentialRampToValueAtTime(0.0001, t+0.9);
+    osc.start(t); osc.stop(t+0.9);
+  }
+}
+
+let _actx = null;
+function getCtx() {
+  if (!_actx) _actx = new (window.AudioContext || window.webkitAudioContext)();
+  if (_actx.state === "suspended") _actx.resume().catch(() => {});
+  return _actx;
+}
+document.addEventListener("pointerdown", () => getCtx(), { once: true });
+
+// ── Sound modes ────────────────────────────────────────────────────────────
+const MODES = {
+
+  bell: {
+    name: "Bell",
+    dims: "Distance → pitch  •  |Lat| → overtone richness",
+    play(lat, lon, km, ctx) {
+      const freq = distToFreq(km);
+      const overtones = 1 + Math.round(Math.abs(lat)/90 * 3); // 1–4 harmonics
+      const now = ctx.currentTime;
+      for (let h = 1; h <= overtones; h++) {
+        const osc = ctx.createOscillator(), env = ctx.createGain();
+        osc.connect(env); env.connect(ctx.destination);
+        osc.type = "sine"; osc.frequency.value = freq * h;
+        const amp = 0.12/(h*h), decay = 2.0/h;
+        env.gain.setValueAtTime(0, now);
+        env.gain.linearRampToValueAtTime(amp, now+0.006);
+        env.gain.exponentialRampToValueAtTime(0.0001, now+decay);
+        osc.start(now); osc.stop(now+decay);
+      }
+    }
+  },
+
+  chord: {
+    name: "Chord",
+    dims: "Distance → root  •  |Lat| → quality (minor/maj/sus/maj7)  •  Lon → open vs close voicing",
+    play(lat, lon, km, ctx) {
+      const root = distToFreq(km);
+      const absLat = Math.abs(lat);
+      const shape = absLat < 20 ? "minor" : absLat < 45 ? "major" : absLat < 70 ? "sus2" : "maj7";
+      const intervals = CHORD_SHAPES[shape];
+      const openVoicing = lon > 0;
+      const now = ctx.currentTime;
+      intervals.forEach((n, i) => {
+        const oct = openVoicing && i > 0 ? Math.floor(i/2) : 0;
+        const freq = semis(root, n) * Math.pow(2, oct);
+        const osc = ctx.createOscillator(), env = ctx.createGain();
+        osc.connect(env); env.connect(ctx.destination);
+        osc.type = "sine"; osc.frequency.value = freq;
+        env.gain.setValueAtTime(0, now);
+        env.gain.linearRampToValueAtTime(0.08, now+0.012);
+        env.gain.exponentialRampToValueAtTime(0.0001, now+2.0);
+        osc.start(now); osc.stop(now+2.0);
+      });
+    }
+  },
+
+  spatial: {
+    name: "Spatial",
+    dims: "Distance → pitch  •  Lon → stereo pan L↔R  •  |Lat| → echo repeats",
+    play(lat, lon, km, ctx) {
+      const freq = distToFreq(km);
+      const pan = Math.max(-1, Math.min(1, lon/180));
+      const echoes = Math.round(Math.abs(lat)/90 * 3);
+      const now = ctx.currentTime;
+      function hit(t, amp) {
+        const osc = ctx.createOscillator(), env = ctx.createGain();
+        const panner = ctx.createStereoPanner();
+        panner.pan.value = pan;
+        osc.connect(env); env.connect(panner); panner.connect(ctx.destination);
+        osc.type = "sine"; osc.frequency.value = freq;
+        env.gain.setValueAtTime(0, t);
+        env.gain.linearRampToValueAtTime(amp, t+0.006);
+        env.gain.exponentialRampToValueAtTime(0.0001, t+0.9);
+        osc.start(t); osc.stop(t+0.9);
+      }
+      hit(now, 0.13);
+      for (let e = 1; e <= echoes; e++) hit(now + e*0.3, 0.13 * Math.pow(0.45, e));
+    }
+  },
+
+  pluck: {
+    name: "Pluck",
+    dims: "Distance → pitch  •  |Lat| → string decay (short→long)  •  Lon → chorus detune",
+    play(lat, lon, km, ctx) {
+      const freq = distToFreq(km);
+      const decay = 0.25 + (Math.abs(lat)/90) * 4.0;
+      const detune = (lon/180) * 10; // ±10 cents
+      const now = ctx.currentTime;
+      [[0, 0.13], [detune, 0.05]].forEach(([cents, amp]) => {
+        const osc = ctx.createOscillator(), env = ctx.createGain();
+        osc.connect(env); env.connect(ctx.destination);
+        osc.type = "triangle";
+        osc.frequency.value = freq * Math.pow(2, cents/1200);
+        env.gain.setValueAtTime(amp, now);
+        env.gain.exponentialRampToValueAtTime(0.0001, now+decay);
+        osc.start(now); osc.stop(now+decay);
+      });
+    }
+  },
+
+  pad: {
+    name: "Pad",
+    dims: "Distance → pitch  •  |Lat| → attack speed  •  Lon → chorus voices (1–4)",
+    play(lat, lon, km, ctx) {
+      const freq = distToFreq(km);
+      const attack = 0.05 + (Math.abs(lat)/90) * 1.5;
+      const voices = 1 + Math.round(((lon+180)/360) * 3);
+      const now = ctx.currentTime;
+      for (let v = 0; v < voices; v++) {
+        const cents = (v - (voices-1)/2) * 7;
+        const osc = ctx.createOscillator(), env = ctx.createGain();
+        osc.connect(env); env.connect(ctx.destination);
+        osc.type = "sine";
+        osc.frequency.value = freq * Math.pow(2, cents/1200);
+        const amp = 0.09/voices;
+        env.gain.setValueAtTime(0, now);
+        env.gain.linearRampToValueAtTime(amp, now+attack);
+        env.gain.exponentialRampToValueAtTime(0.0001, now+3.5);
+        osc.start(now); osc.stop(now+3.5+attack);
+      }
+    }
+  },
+
+  binaural: {
+    name: "Binaural",
+    dims: "Lat → carrier  •  Lon → beat frequency  (headphones recommended)",
+    play(lat, lon, km, ctx) {
+      const carrier = 80 + ((lat+90)/180) * 120;  // 80–200 Hz
+      const beat    = 3  + ((lon+180)/360) * 13;  // 3–16 Hz beat
+      const dur = 2.0, now = ctx.currentTime;
+      [[-1, carrier], [1, carrier+beat]].forEach(([panVal, f]) => {
+        const osc = ctx.createOscillator(), env = ctx.createGain();
+        const panner = ctx.createStereoPanner();
+        panner.pan.value = panVal;
+        osc.connect(env); env.connect(panner); panner.connect(ctx.destination);
+        osc.type = "sine"; osc.frequency.value = f;
+        env.gain.setValueAtTime(0, now);
+        env.gain.linearRampToValueAtTime(0.14, now+0.02);
+        env.gain.setValueAtTime(0.14, now+dur-0.15);
+        env.gain.linearRampToValueAtTime(0, now+dur);
+        osc.start(now); osc.stop(now+dur);
+      });
+    }
+  },
+
+  glass: {
+    name: "Glass",
+    dims: "Distance → pitch (×2 octave)  •  |Lat| → shimmer partials  •  Lon → tremolo speed",
+    play(lat, lon, km, ctx) {
+      const freq = distToFreq(km) * 2;
+      const partials = 3 + Math.round(Math.abs(lat)/90 * 5); // 3–8
+      const tremoloHz = 2 + ((lon+180)/360) * 14;
+      const dur = 2.2, now = ctx.currentTime;
+      const lfo = ctx.createOscillator(), lfoG = ctx.createGain();
+      lfo.frequency.value = tremoloHz; lfo.type = "sine";
+      lfoG.gain.value = 0.03;
+      lfo.connect(lfoG); lfo.start(now); lfo.stop(now+dur);
+      for (let h = 1; h <= partials; h++) {
+        const osc = ctx.createOscillator(), env = ctx.createGain();
+        osc.connect(env); env.connect(ctx.destination);
+        lfoG.connect(env.gain);
+        osc.type = "sine"; osc.frequency.value = freq * h;
+        const amp = 0.07/(h*h), d = dur/Math.sqrt(h);
+        env.gain.setValueAtTime(0, now);
+        env.gain.linearRampToValueAtTime(amp, now+0.003);
+        env.gain.exponentialRampToValueAtTime(0.0001, now+d);
+        osc.start(now); osc.stop(now+d);
+      }
+    }
+  },
+
+  storm: {
+    name: "Storm",
+    dims: "Distance → tone pitch  •  Equator → pure noise, poles → pure tone  •  Lon → echo count",
+    play(lat, lon, km, ctx) {
+      const freq = distToFreq(km);
+      const toneRatio = Math.abs(lat)/90;
+      const echoes = Math.round(((lon+180)/360) * 3);
+      const now = ctx.currentTime;
+      function hit(t, amp) {
+        const dur = 0.35;
+        const noiseAmp = amp * (1-toneRatio) * 0.4;
+        if (noiseAmp > 0.001) {
+          const buf = ctx.createBuffer(1, ctx.sampleRate*dur, ctx.sampleRate);
+          const d = buf.getChannelData(0);
+          for (let i = 0; i < d.length; i++) d[i] = Math.random()*2-1;
+          const src = ctx.createBufferSource(), ng = ctx.createGain();
+          src.buffer = buf; src.connect(ng); ng.connect(ctx.destination);
+          ng.gain.setValueAtTime(noiseAmp, t);
+          ng.gain.exponentialRampToValueAtTime(0.0001, t+dur);
+          src.start(t);
+        }
+        const toneAmp = amp * toneRatio * 0.15;
+        if (toneAmp > 0.001) {
+          const osc = ctx.createOscillator(), eg = ctx.createGain();
+          osc.connect(eg); eg.connect(ctx.destination);
+          osc.type = "triangle"; osc.frequency.value = freq;
+          eg.gain.setValueAtTime(toneAmp, t);
+          eg.gain.exponentialRampToValueAtTime(0.0001, t+dur*0.6);
+          osc.start(t); osc.stop(t+dur);
+        }
+      }
+      hit(now, 1);
+      for (let e = 1; e <= echoes; e++) hit(now + e*0.14, 0.5/e);
+    }
+  },
+
+  custom: {
+    name: "Custom",
+    dims: "",
+    play(lat, lon, km, ctx) {
+      // 0=close/south/west → 1=far/north/east; pitch uses inverted dist so near=high
+      const tDist = 1 - Math.min(1, Math.log1p(km) / Math.log1p(10_000));
+      const tLat  = (lat + 90) / 180;
+      const tLon  = (lon + 180) / 360;
+      const s = { freq: PENTA[8], decay: 1.5, attack: 0.006, pan: 0, overtones: 2, chord: null, echo: 0, chorus: 0, tremolo: 0, volume: 1 };
+      PARAMS[customAssign.dist]?.apply(tDist, s);
+      PARAMS[customAssign.lat]?.apply(tLat, s);
+      PARAMS[customAssign.lon]?.apply(tLon, s);
+      playCustomNote(s, ctx);
+    }
+  },
+};
+
+let currentMode = "bell";
+let muted = false;
+let _lastNote = 0;
+
+function maybePlayNote(lat, lon, km) {
+  if (muted || km === null || isNaN(km)) return;
+  const now = performance.now();
+  if (now - _lastNote < 120) return;
+  _lastNote = now;
+  getCtx();
+  MODES[currentMode].play(lat, lon, km, getCtx());
+}
+
+// ── Sound panel init ───────────────────────────────────────────────────────
+(function initSoundPanel() {
+  const grid       = document.getElementById("mode-grid");
+  const desc       = document.getElementById("mode-desc");
+  const muteBtn    = document.getElementById("mute-btn");
+  const customDiv  = document.getElementById("custom-assign");
+
+  function customDimsLabel() {
+    return `Dist → ${PARAMS[customAssign.dist].name}  •  Lat → ${PARAMS[customAssign.lat].name}  •  Lon → ${PARAMS[customAssign.lon].name}`;
+  }
+
+  function activateMode(key) {
+    currentMode = key;
+    grid.querySelectorAll(".mode-btn").forEach(b =>
+      b.classList.toggle("active", b.dataset.mode === key));
+    const isCustom = key === "custom";
+    customDiv.style.display = isCustom ? "block" : "none";
+    desc.textContent = isCustom ? customDimsLabel() : MODES[key].dims;
+    getCtx();
+  }
+
+  // Mode buttons
+  Object.entries(MODES).forEach(([key, mode]) => {
+    const btn = document.createElement("button");
+    btn.className = "mode-btn" + (key === currentMode ? " active" : "");
+    btn.textContent = mode.name;
+    btn.dataset.mode = key;
+    btn.addEventListener("click", () => activateMode(key));
+    grid.appendChild(btn);
+  });
+
+  desc.textContent = MODES[currentMode].dims;
+
+  // Build custom-assign rows
+  [["dist", "Dist"], ["lat", "Lat"], ["lon", "Lon"]].forEach(([dim, label]) => {
+    const row = document.createElement("div");
+    row.className = "assign-row";
+    const lbl = document.createElement("span");
+    lbl.className = "assign-dim";
+    lbl.textContent = label;
+    const sel = document.createElement("select");
+    sel.className = "assign-sel";
+    sel.dataset.dim = dim;
+    Object.entries(PARAMS).forEach(([key, param]) => {
+      const opt = document.createElement("option");
+      opt.value = key;
+      opt.textContent = param.name;
+      if (customAssign[dim] === key) opt.selected = true;
+      sel.appendChild(opt);
+    });
+    sel.addEventListener("change", () => {
+      customAssign[sel.dataset.dim] = sel.value;
+      if (currentMode === "custom") desc.textContent = customDimsLabel();
+    });
+    row.appendChild(lbl);
+    row.appendChild(sel);
+    customDiv.appendChild(row);
+  });
+
+  muteBtn.addEventListener("click", () => {
+    muted = !muted;
+    muteBtn.textContent = muted ? "🔇" : "🔊";
+    muteBtn.classList.toggle("muted", muted);
+  });
+})();
+
+// ── Blitzortung message decoder ───────────────────────────────────────────
+function decodeStrike(raw) {
+  function readNumber(i) {
+    while (i < raw.length) {
+      const c = raw.charCodeAt(i);
+      if (c === 0x2D || (c >= 0x30 && c <= 0x39)) break;
+      i++;
+    }
+    let num = "";
+    while (i < raw.length) {
+      const c = raw.charCodeAt(i);
+      if (c === 0x2D && num === "")       { num += "-"; i++; }
+      else if (c === 0x2E)                { num += "."; i++; }
+      else if (c >= 0x30 && c <= 0x39)   { num += raw[i]; i++; }
+      else if (c >= 0x100 && c <= 0x163) { num += String(c - 0x100).padStart(2, "0"); i++; }
+      else break;
+    }
+    return num ? parseFloat(num) : null;
+  }
+
+  const li = raw.indexOf('"lat');
+  const ni = raw.indexOf("lon");
+  if (li === -1 || ni === -1) return null;
+
+  const lat = readNumber(li + 4);
+  const lon = readNumber(ni + 3);
+  if (lat === null || lon === null || isNaN(lat) || isNaN(lon)) return null;
+  if (lat < -90 || lat > 90 || lon < -180 || lon > 180) return null;
+  return { lat, lon };
+}
+
+// ── WebSocket ─────────────────────────────────────────────────────────────
+const WS_URLS = [
+  "wss://ws1.blitzortung.org/",
+  "wss://ws5.blitzortung.org/",
+  "wss://ws7.blitzortung.org/",
+  "wss://ws8.blitzortung.org/",
+];
+let wsIndex = 0, ws = null, reconnectTimer = null;
+
+const pill   = document.getElementById("status-pill");
+const pillTx = document.getElementById("status-text");
+function setStatus(state, text) { pill.className = "pill " + state; pillTx.textContent = text; }
+
+function connect() {
+  const url = WS_URLS[wsIndex % WS_URLS.length];
+  wsIndex++;
+  setStatus("connecting", "Connecting…");
+
+  ws = new WebSocket(url);
+  const openTimeout = setTimeout(() => ws.close(), 8000);
+
+  ws.addEventListener("open", () => {
+    clearTimeout(openTimeout);
+    setStatus("connected", "Live");
+    ws.send(JSON.stringify({ a: 111 }));
+  });
+
+  ws.addEventListener("message", event => {
+    const strike = decodeStrike(event.data);
+    if (strike) onStrike(strike.lat, strike.lon);
+  });
+
+  ws.addEventListener("close", event => {
+    clearTimeout(openTimeout);
+    setStatus("connecting", `Reconnecting… (${event.code})`);
+    reconnectTimer = setTimeout(connect, 4000);
+  });
+
+  ws.addEventListener("error", () => ws.close());
+}
+
+connect();
+</script>
+</body>
+</html>
