@@ -166,6 +166,7 @@
       padding: 7px 10px;
       height: 56px;
     }
+    #bottom-bar > * { flex-shrink: 0; }
 
     .bar-sep {
       width: 1px;
@@ -342,6 +343,85 @@
     .map-sel:focus { outline: none; border-color: rgba(220,168,48,0.7); }
 
     .sett-note { margin-top: 11px; padding-top: 9px; border-top: 1px solid rgba(255,255,255,0.12); font-size: 0.54rem; color: rgba(255,255,255,0.5); line-height: 1.6; }
+
+    /* ── Welcome modal ──────────────────────────────────────────────────── */
+    #welcome-overlay {
+      position: fixed; inset: 0; z-index: 1200;
+      background: rgba(0,0,0,0.9);
+      display: flex; align-items: center; justify-content: center;
+      opacity: 1; transition: opacity 0.25s;
+      padding: 16px;
+    }
+    #welcome-overlay.closed { opacity: 0; pointer-events: none; }
+    #welcome-modal {
+      background: rgba(6,4,1,0.99);
+      border: 1px solid rgba(210,160,50,0.55);
+      padding: 28px 32px 26px;
+      max-width: 440px; width: 100%;
+      max-height: 85vh; overflow-y: auto;
+    }
+    #welcome-modal h2 {
+      font-size: 1.1rem; letter-spacing: 0.08em; text-transform: uppercase;
+      color: rgba(220,168,48,0.95); margin-bottom: 16px;
+    }
+    #welcome-modal p {
+      font-size: 0.72rem; line-height: 1.75;
+      color: rgba(255,255,255,0.8); margin-bottom: 14px;
+    }
+    #welcome-modal p:last-of-type { margin-bottom: 0; }
+    #welcome-ok {
+      display: block; width: 100%; margin-top: 18px;
+      padding: 12px; background: rgba(220,168,48,0.16);
+      border: 1px solid rgba(220,168,48,0.8); color: rgba(220,168,48,1);
+      font-family: 'Jura', ui-monospace, monospace;
+      font-size: 0.7rem; font-weight: 700; letter-spacing: 0.14em;
+      text-transform: uppercase; cursor: pointer;
+      transition: background 0.15s, color 0.15s;
+    }
+    #welcome-ok:hover { background: rgba(220,168,48,0.32); color: #fff; }
+
+    /* ── Mobile responsiveness ─────────────────────────────────────────── */
+
+    /* Bottom bar: wrap to a 2nd row whenever the single-row content can't
+       fit — this range covers tablet / mid-width windows, not just phones. */
+    @media (max-width: 900px) {
+      #bottom-bar { flex-wrap: wrap; height: auto; row-gap: 6px; justify-content: center; }
+      #vis-chips { margin-left: 0; }
+      /* Bar can now grow to 2 rows — keep the credit line clear of it */
+      #credit { bottom: 120px; }
+    }
+
+    @media (max-width: 640px) {
+      #top-strip { flex-wrap: wrap; row-gap: 6px; }
+      #app-name { font-size: 0.85rem; }
+      #hud { flex-wrap: wrap; row-gap: 5px; padding: 5px 8px; }
+
+      #strike-list { left: 14px; right: 14px; width: auto; top: 98px; max-height: 40vh; }
+
+      #bottom-bar { padding: 8px; }
+      .bar-sep { display: none; }
+      #voice-chips { flex-wrap: wrap; justify-content: center; }
+      #vis-chips { flex-wrap: wrap; justify-content: center; }
+      .voice-chip { width: 58px; height: 34px; }
+      .vis-btn { width: 64px; height: 34px; }
+
+      #settings-panel { left: 14px; right: 14px; min-width: auto; }
+      #credit { right: 14px; bottom: auto; top: 70px; }
+      #brand { display: none; }
+    }
+
+    /* Once the HUD actually drops to its own row under the logo, stretch
+       it to fill the full width instead of sitting at content width. */
+    @media (max-width: 480px) {
+      #hud { width: 100%; }
+    }
+
+    @media (max-width: 380px) {
+      .voice-chip { width: 50px; height: 32px; }
+      .vc-name { font-size: 0.64rem; }
+      .vis-btn { width: 54px; height: 32px; font-size: 0.6rem; }
+      #sidebar-header span:first-child { display: none; }
+    }
   </style>
 </head>
 <body>
@@ -410,7 +490,28 @@
 
 <div id="brand">⚡ Lightning</div>
 
+<!-- Welcome modal -->
+<div id="welcome-overlay">
+  <div id="welcome-modal">
+    <h2>SRTK-30k</h2>
+    <p>Every lightning strike on Earth, live, turned into sound.</p>
+    <p>Turn your volume up.</p>
+    <button id="welcome-ok">Enter</button>
+  </div>
+</div>
+
 <script>
+// ── Welcome / audio unlock ──────────────────────────────────────────────────
+(function() {
+  const overlay = document.getElementById('welcome-overlay');
+  const btn = document.getElementById('welcome-ok');
+  btn.addEventListener('click', () => {
+    getCtx();
+    overlay.classList.add('closed');
+    setTimeout(() => overlay.remove(), 300);
+  });
+})();
+
 // ── User location ─────────────────────────────────────────────────────────
 let userLat = null, userLon = null;
 
@@ -503,7 +604,8 @@ fetch("https://unpkg.com/world-atlas@2/countries-110m.json")
   });
 
 const controls = globe.controls();
-controls.autoRotate = false;
+controls.autoRotate = true;
+controls.autoRotateSpeed = 0.35;
 
 setTimeout(() => {
   const renderer = globe.renderer();
